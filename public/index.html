@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Chungdacoeim's Bot Controller</title>
+    <style>
+        body {
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0; padding: 20px;
+        }
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(15px); /* iOS Glass Effect */
+            -webkit-backdrop-filter: blur(15px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            margin-bottom: 20px;
+        }
+        button {
+            background: rgba(255, 255, 255, 0.2); border: none; padding: 10px 20px;
+            border-radius: 10px; color: white; cursor: pointer; font-weight: bold;
+            transition: all 0.3s ease; margin: 5px;
+        }
+        button:hover { background: rgba(255, 255, 255, 0.4); }
+        .popup { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #28a745; padding: 30px; border-radius: 15px; font-size: 24px; text-align: center; z-index: 1000;}
+    </style>
+    <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+
+<div class="glass-panel">
+    <h2>Trạng thái Bot: <span id="user">Chungdacoeim</span></h2>
+    <p>Số dư: <strong id="balance">0đ</strong></p>
+    <p>Nhiệm vụ: <strong id="tasks">0/0</strong></p>
+    <p>Tiến trình: <span id="progress">Đang chờ...</span></p>
+</div>
+
+<div class="glass-panel">
+    <h3>Điều khiển</h3>
+    <button onclick="sendCommand('/uptolink2step')">UpToLink 2 Step</button>
+    <button onclick="sendCommand('/uptolink3step')">UpToLink 3 Step</button>
+    <button onclick="sendCommand('/withdraw')" style="background: rgba(255, 0, 0, 0.5);">Withdraw</button>
+    <hr style="border-color: rgba(255,255,255,0.1); margin: 15px 0;">
+    <label>Auto-PPLink: </label>
+    <input type="checkbox" id="autoPpLink" onchange="toggleAuto(this)">
+    <label>Delay (giây):</label>
+    <input type="number" id="delayInput" value="5" style="width: 50px;" onchange="updateDelay(this)">
+</div>
+
+<div class="glass-panel">
+    <h3>Thiết bị (Extension) đang kết nối: <span id="devCount">0</span></h3>
+    <ul id="deviceList"></ul>
+</div>
+
+<div id="withdrawPopup" class="popup">
+    🎉 Tiền về, Tiền về! 🎉<br><br>
+    <button onclick="document.getElementById('withdrawPopup').style.display='none'">OK</button>
+</div>
+
+<script>
+    const socket = io();
+
+    socket.on('UPDATE_STATS', (data) => {
+        document.getElementById('balance').innerText = data.balance + 'đ';
+        document.getElementById('tasks').innerText = data.tasks;
+    });
+
+    socket.on('UPDATE_DEVICES', (devices) => {
+        document.getElementById('devCount').innerText = devices.length;
+        document.getElementById('deviceList').innerHTML = devices.map(d => 
+            `<li>🌐 IP: ${d.ip} - Quốc gia: ${d.country} - Trạng thái: ${d.status}</li>`
+        ).join('');
+    });
+
+    socket.on('WITHDRAW_SUCCESS', () => {
+        document.getElementById('withdrawPopup').style.display = 'block';
+    });
+
+    socket.on('UPDATE_LOG', (msg) => {
+        document.getElementById('progress').innerText = msg;
+    });
+
+    function sendCommand(cmd) { socket.emit('SEND_COMMAND', cmd); }
+    function toggleAuto(cb) { socket.emit('TOGGLE_AUTOPPLINK', cb.checked); }
+    function updateDelay(input) { socket.emit('SET_DELAY', parseInt(input.value) * 1000); }
+
+    // Lưu cấu hình xuống LocalStorage để giữ state khi reload
+    window.onload = () => {
+        const savedAuto = localStorage.getItem('autoPpLink') === 'true';
+        document.getElementById('autoPpLink').checked = savedAuto;
+        toggleAuto({ checked: savedAuto });
+    }
+    document.getElementById('autoPpLink').addEventListener('change', function() {
+        localStorage.setItem('autoPpLink', this.checked);
+    });
+</script>
+</body>
+</html>

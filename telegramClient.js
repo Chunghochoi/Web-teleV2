@@ -2,44 +2,70 @@ const { Api, TelegramClient } = require("telegram");
 const { StringSession } = require("telegram/sessions");
 const { NewMessage } = require("telegram/events");
 
-const apiId = YOUR_API_ID;
-const apiHash = 'YOUR_API_HASH';
-const session = new StringSession('YOUR_SAVED_SESSION');
-const client = new TelegramClient(session, apiId, apiHash, { connectionRetries: 5 });
+// Đọc biến môi trường
+const apiId = parseInt(process.env.API_ID);
+const apiHash = process.env.API_HASH;
+const stringSession = new StringSession(process.env.SESSION_STRING || "");
+const BOT_ID = parseInt(process.env.BOT_ID);
 
+// Khởi tạo client Telegram
+const client = new TelegramClient(stringSession, apiId, apiHash, { connectionRetries: 5 });
+
+// --- CÁC BIẾN TRẠNG THÁI ---
 let withdrawState = 'IDLE'; // IDLE, WAIT_NAME, WAIT_AMOUNT
-let withdrawAmount = 0;
-let linkTasks = {}; // Lưu msgId của từng link để ấn nút "Kiểm tra hoàn thành"
+let withdrawAmount = "0";
 let dailyLinks = 0;
+let isPaused = false;
+let currentCommand = '/uptolink2step';
 
-async function initTelegram(io) {
+/**
+ * Hàm Khởi tạo Telegram Client và Lắng nghe sự kiện
+ * @param {Object} io - Đối tượng Socket.io để gửi Real-time lên Web UI
+ * @param {Function} distributeLinkCallback - Hàm gọi ngược lại server.js để chia link cho thiết bị
+ * @param {Function} getAutoStatus - Hàm kiểm tra xem Auto-PPLink trên Web đang BẬT hay TẮT
+ */
+async function initTelegram(io, distributeLinkCallback, getAutoStatus) {
     await client.connect();
-    console.log("Đã kết nối Telegram Userbot: Chungdacoeim");
+    console.log("✅ Đã kết nối Telegram Userbot thành công!");
 
+    // Lắng nghe tin nhắn mới
     client.addEventHandler(async (event) => {
         const message = event.message;
-        if (message.peerId.userId?.toJSNumber() !== ID_CUA_BOT_CRYPTO) return;
+        
+        // Bỏ qua nếu không phải tin nhắn từ Bot Crypto
+        if (message.peerId.userId?.toJSNumber() !== BOT_ID) return;
 
-        const text = message.message;
+        const text = message.message || "";
 
-        // 1. Nhận Link từ /uptolink2step hoặc 3step
-        if (message.replyMarkup) {
-            const buttons = message.replyMarkup.rows[0]?.buttons;
-            if (buttons && buttons[0].url) {
-                const url = buttons[0].url;
+        // Bỏ qua tin nhắn trung gian không có nút
+        if (text.includes("Đang tạo link...")) return;
+
+        // ==========================================
+        // A. LUỒNG NHẬN LINK NHIỆM VỤ TỪ BOT
+        // ==========================================
+        if (message.replyMarkup && message.replyMarkup.rows.length >= 2) {
+            const btnMoLink = message.replyMarkup.rows[0]?.buttons[0];
+            
+            if (btnMoLink && btnMoLink.url && !isPaused) {
+                const url = btnMoLink.url;
                 const msgId = message.id;
-                linkTasks[url] = msgId; // Lưu msgId để click nút sau này
-                io.emit("NEW_LINK_RECEIVED", { url, msgId });
-                dailyLinks++;
                 
-                io.emit("UPDATE_LOG", `Nhận link mới, tổng: ${dailyLinks}`);
-                if (dailyLinks % 50 === 0) client.sendMessage(message.chatId, { message: "/top" });
-                if (dailyLinks === 30) client.sendMessage(message.chatId, { message: "/spin" });
-                client.sendMessage(message.chatId, { message: "/view" });
+                dailyLinks++;
+                io.emit("UPDATE_LOG", `[Hệ thống] Nhận link NV #${dailyLinks}. Đang tìm thiết bị rảnh...`);
+                
+                // Gọi hàm bên server.js để chia link cho máy tính
+                distributeLinkCallback(url, msgId);
+
+                // Tự động kiểm tra mốc để gửi lệnh phụ
+                if (dailyLinks % 50 === 0) await client.sendMessage(BOT_ID, { message: "/top" });
+                if (dailyLinks === 30) await client.sendMessage(BOT_ID, { message: "/spin" });
+                await client.sendMessage(BOT_ID, { message: "/view" });
             }
         }
 
-        // 2. Logic /view
+        // ==========================================
+        // B. LUỒNG LẤY THÔNG TIN CẬP NHẬT (/view)
+        // ==========================================
         if (text.includes("Số dư:") && text.includes("NV hôm nay:")) {
             const balanceRegex = /Số dư: (\d+)đ/;
             const taskRegex = /NV hôm nay: (\d+\/\d+)/;
@@ -48,108 +74,95 @@ async function initTelegram(io) {
             io.emit("UPDATE_STATS", { balance, tasks });
         }
 
-        // 3. Logic /withdraw
+        // ==========================================
+        // C. LUỒNG RÚT TIỀN TỰ ĐỘNG (/withdraw)
+        // ==========================================
         if (withdrawState === 'IDLE' && text.includes("Nhập tên ngân hàng")) {
             const balanceRegex = /Số dư: (\d+)đ/;
             withdrawAmount = text.match(balanceRegex)?.[1] || "0";
-            await client.sendMessage(message.chatId, { message: "Momo" });
+            io.emit("UPDATE_LOG", `[Rút tiền] Đang yêu cầu rút về Momo...`);
+            await client.sendMessage(BOT_ID, { message: "Momo" });
             withdrawState = 'WAIT_NAME';
         } 
         else if (withdrawState === 'WAIT_NAME' && text.includes("Nhập tên chủ tài khoản")) {
-            await client.sendMessage(message.chatId, { message: "DANG VAN CHUNG" });
+            io.emit("UPDATE_LOG", `[Rút tiền] Đang nhập tên chủ TK...`);
+            await client.sendMessage(BOT_ID, { message: "DANG VAN CHUNG" });
             withdrawState = 'WAIT_AMOUNT';
         }
         else if (withdrawState === 'WAIT_AMOUNT' && text.includes("Nhập số tiền muốn rút")) {
-            await client.sendMessage(message.chatId, { message: withdrawAmount });
+            io.emit("UPDATE_LOG", `[Rút tiền] Đang gửi yêu cầu rút ${withdrawAmount}đ...`);
+            await client.sendMessage(BOT_ID, { message: withdrawAmount });
             withdrawState = 'IDLE';
+        }
+        else if (text.includes("Yêu cầu rút") && text.includes("đã gửi. Chờ admin duyệt")) {
+            io.emit("UPDATE_LOG", `[Rút tiền] Hoàn tất lệnh. Chờ duyệt!`);
+            isPaused = false; // Xong luồng rút tiền, nhả cờ Pause
         }
         else if (text.includes("Yêu cầu rút") && text.includes("đã được duyệt!")) {
             io.emit("WITHDRAW_SUCCESS", "Tiền về, Tiền về");
         }
 
-        // 4. Báo cáo hoàn thành nhiệm vụ từ Admin
+        // ==========================================
+        // D. LUỒNG ADMIN DUYỆT NHIỆM VỤ -> CHẠY TIẾP AUTO
+        // ==========================================
         if (text.includes("Admin đã duyệt nhiệm vụ của bạn!")) {
-            io.emit("TASK_APPROVED", { text });
-            // Nếu bật auto-pplink, hệ thống gửi lệnh lấy link tiếp theo ở logic Socket
+            io.emit("UPDATE_LOG", `[Thành công] Nhiệm vụ đã được duyệt cộng tiền!`);
+            
+            // Lấy trạng thái xem Web có đang bật nút Auto không
+            const isAutoOn = getAutoStatus();
+            if (isAutoOn && !isPaused) {
+                setTimeout(async () => {
+                    await client.sendMessage(BOT_ID, { message: currentCommand });
+                }, 2000); // Tránh bị spam quá nhanh
+            }
         }
+
     }, new NewMessage({}));
 }
 
-// Hàm ấn nút "Kiểm tra hoàn thành" theo msgId
-async function clickCheckCompletionButton(msgId) {
-    // Lấy data của nút "Kiểm tra hoàn thành" (Thường là nút thứ 2 trong tin nhắn)
-    const msgs = await client.getMessages(ID_CUA_BOT_CRYPTO, { ids: msgId });
-    const buttonData = msgs[0].replyMarkup.rows[0]?.buttons[1]?.data; 
-    await client.invoke(new Api.messages.GetBotCallbackAnswer({
-        peer: ID_CUA_BOT_CRYPTO,
-        msgId: msgId,
-        data: buttonData
-    }));
-}
-// ... (các setup thư viện giữ nguyên như phần trước) ...
-
-// 1. Phần Lắng nghe tin nhắn mới từ Bot
-client.addEventHandler(async (event) => {
-    const message = event.message;
-    if (message.peerId.userId?.toJSNumber() !== ID_CUA_BOT_CRYPTO) return;
-
-    const text = message.message;
-
-    // Bỏ qua tin nhắn "Đang tạo link..." không có nút bấm
-    if (text.includes("Đang tạo link...")) return;
-
-    // 2. Nhận Link từ tin nhắn có chứa nhiệm vụ (Dựa vào ảnh)
-    if (message.replyMarkup && message.replyMarkup.rows.length >= 2) {
-        // Lấy hàng 1 (rows[0]), nút 1 (buttons[0]) -> Nút "Mở link"
-        const btnMoLink = message.replyMarkup.rows[0]?.buttons[0];
-        
-        if (btnMoLink && btnMoLink.url) {
-            const url = btnMoLink.url;
-            const msgId = message.id; // Lưu lại đúng ID của tin nhắn này
-            
-            linkTasks[url] = msgId; 
-            dailyLinks++;
-            
-            console.log(`Đã lấy URL: ${url} từ MessageID: ${msgId}`);
-            
-            // Gửi qua Socket cho Extension mở web
-            io.emit("NEW_LINK_RECEIVED", { url, msgId });
-            io.emit("UPDATE_LOG", `Nhận link nhiệm vụ #${dailyLinks}`);
-
-            // Logic tự động /top, /spin, /view như yêu cầu của bạn
-            if (dailyLinks % 50 === 0) client.sendMessage(message.chatId, { message: "/top" });
-            if (dailyLinks === 30) client.sendMessage(message.chatId, { message: "/spin" });
-            client.sendMessage(message.chatId, { message: "/view" });
-        }
-    }
-
-    // ... (Các logic /view, /withdraw, đọc số dư giữ nguyên như cũ) ...
-
-}, new NewMessage({}));
-
-
-// 3. Hàm ấn nút "Kiểm tra hoàn thành" (Đã fix theo ảnh)
-async function clickCheckCompletionButton(msgId) {
+/**
+ * Hàm Gọi API Telegram để click nút "Kiểm tra hoàn thành"
+ */
+async function clickCheckCompletionButton(msgId, deviceIp, io) {
     try {
-        // Lấy lại tin nhắn dựa trên msgId đã lưu
-        const msgs = await client.getMessages(ID_CUA_BOT_CRYPTO, { ids: msgId });
+        io.emit("UPDATE_LOG", `[Thiết bị ${deviceIp}] Báo cáo hoàn thành. Đang ấn nút kiểm tra...`);
+        const msgs = await client.getMessages(BOT_ID, { ids: msgId });
         if (!msgs || msgs.length === 0) return;
 
-        const targetMessage = msgs[0];
-
-        // Lấy hàng 2 (rows[1]), nút 1 (buttons[0]) -> Nút "Kiểm tra hoàn thành"
-        const btnKiemTra = targetMessage.replyMarkup.rows[1]?.buttons[0];
+        // Lấy hàng 2 (rows[1]), nút 1 -> Nút "Kiểm tra hoàn thành"
+        const btnKiemTra = msgs[0].replyMarkup?.rows[1]?.buttons[0];
         
         if (btnKiemTra && btnKiemTra.data) {
-            // Thực hiện hành động click (Gửi callback query) ẩn dưới background
             await client.invoke(new Api.messages.GetBotCallbackAnswer({
-                peer: ID_CUA_BOT_CRYPTO,
+                peer: BOT_ID,
                 msgId: msgId,
-                data: btnKiemTra.data // Data mã hóa riêng của nút này
+                data: btnKiemTra.data
             }));
-            console.log(`Đã ấn "Kiểm tra hoàn thành" cho tin nhắn ID: ${msgId}`);
+            io.emit("UPDATE_LOG", `[Hệ thống] Đã ấn nút thành công cho Message ID: ${msgId}`);
         }
     } catch (error) {
         console.error("Lỗi khi ấn nút kiểm tra:", error);
+        io.emit("UPDATE_LOG", `[Lỗi] Không thể ấn kiểm tra cho ID ${msgId}`);
     }
 }
+
+/**
+ * Hàm gửi lệnh từ Web UI cho Bot (Ví dụ: /withdraw, /uptolink2step, ...)
+ */
+async function sendTelegramCommand(command, isWithdraw = false) {
+    if (isWithdraw) {
+        isPaused = true;
+        withdrawState = 'IDLE';
+    } else {
+        isPaused = false;
+        currentCommand = command; // Lưu lại lệnh để tự động lặp lại
+    }
+    await client.sendMessage(BOT_ID, { message: command });
+}
+
+// Xuất các module để server.js có thể sử dụng
+module.exports = {
+    initTelegram,
+    clickCheckCompletionButton,
+    sendTelegramCommand
+};
