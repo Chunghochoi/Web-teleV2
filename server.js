@@ -1,54 +1,26 @@
-require('dotenv').config();
-const express = require('express');
-const http = require('http');
-const { Server } = require("socket.io");
-const path = require('path');
-const geoip = require('geoip-lite');
-
-// IMPORT CÁC HÀM TỪ FILE telegramClient.js VÀO ĐÂY
-const { initTelegram, clickCheckCompletionButton, sendTelegramCommand } = require('./telegramClient');
-
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
-
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Trạng thái Server
-let devices = {};
-let autoPplinkOn = false;
-let linkDelay = 5000; 
-
-// Hàm dùng để Telegram gọi ngược lại khi có link mới
-function distributeLink(url, msgId) {
-    const idleDevice = Object.values(devices).find(d => d.status === 'idle');
-    if (idleDevice) {
-        devices[idleDevice.id].status = 'working';
-        io.emit('UPDATE_DEVICES', Object.values(devices)); 
-        io.to(idleDevice.id).emit('OPEN_LINK', { url, msgId });
-        io.emit("UPDATE_LOG", `[Hệ thống] Đã giao link ${msgId} cho thiết bị IP ${idleDevice.ip}`);
-    } else {
-        io.emit("UPDATE_LOG", `[Cảnh báo] Nhận được link nhưng không có thiết bị rảnh!`);
-    }
-}
-
-// Hàm cung cấp trạng thái Auto cho Telegram
-const getAutoStatus = () => autoPplinkOn;
-
-// KHỞI TẠO TELEGRAM USERBOT NGAY KHI CHẠY SERVER
-initTelegram(io, distributeLink, getAutoStatus);
-
-// Xử lý Socket.io (Thiết bị Web)
 io.on('connection', (socket) => {
-    const ip = socket.handshake.headers['x-forwarded-for']?.split(',')[0] || socket.request.connection.remoteAddress;
-    const geo = geoip.lookup(ip);
-    
-    devices[socket.id] = { id: socket.id, ip: ip, country: geo ? geo.country : 'Unknown', status: 'idle' };
-    io.emit('UPDATE_DEVICES', Object.values(devices));
+    // Chỉ đăng ký thiết bị khi nó báo danh là Extension
+    socket.on('REGISTER_EXTENSION', () => {
+        const ip = socket.handshake.headers['x-forwarded-for']?.split(',')[0] || socket.request.connection.remoteAddress;
+        const geo = geoip.lookup(ip);
+        
+        // FIX LỖI: Dùng IP làm ID duy nhất. Nếu cùng IP vào lại, nó sẽ ghi đè lên thiết bị cũ (Không bị hiện 2 thiết bị nữa)
+        devices[ip] = { 
+            id: socket.id, 
+            ip: ip, 
+            country: geo ? geo.country : 'Unknown', 
+            status: 'idle' 
+        };
+        io.emit('UPDATE_DEVICES', Object.values(devices));
+    });
 
     socket.on('disconnect', () => { 
-        delete devices[socket.id]; 
-        io.emit('UPDATE_DEVICES', Object.values(devices)); 
+        // Tìm và xóa đúng thiết bị theo socket.id bị mất kết nối
+        const ipKey = Object.keys(devices).find(ip => devices[ip].id === socket.id);
+        if (ipKey) {
+            delete devices[ipKey];
+            io.emit('UPDATE_DEVICES', Object.values(devices));
+        }
     });
 
     socket.on('TOGGLE_AUTOPPLINK', (status) => {
@@ -58,13 +30,15 @@ io.on('connection', (socket) => {
     
     socket.on('SET_DELAY', (ms) => linkDelay = ms);
 
-    // Khi Extension trên trình duyệt làm xong nhiệm vụ
+    // Xử lý khi tab vào tới đích
     socket.on('URL_REACHED', async ({ msgId }) => {
-        if(devices[socket.id]) {
-            devices[socket.id].status = 'idle';
+        const ipKey = Object.keys(devices).find(ip => devices[ip].id === socket.id);
+        if(ipKey) {
+            devices[ipKey].status = 'idle'; // Đưa thiết bị về trạng thái rảnh
             io.emit('UPDATE_DEVICES', Object.values(devices));
-            // Gọi hàm ấn nút bên file telegramClient.js
-            await clickCheckCompletionButton(msgId, devices[socket.id].ip, io);
+            
+            // Gọi hàm ấn nút telegram
+            await clickCheckCompletionButton(msgId, devices[ipKey].ip, io);
         }
     });
 
@@ -88,9 +62,4 @@ io.on('connection', (socket) => {
             }
         }
     });
-});
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`🚀 Server Node.js & Socket.io đang chạy tại Port ${PORT}`);
 });
