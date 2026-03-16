@@ -69,6 +69,61 @@ io.on('connection', (socket) => {
         }
     });
 
+    // --- KIỂM TRA MÁY RẢNH KHI ẤN LỆNH ---
+    socket.on('SEND_COMMAND', async (command) => {
+        if (command === '/withdraw') {
+            io.emit("UPDATE_LOG", `[Hệ thống] Tạm dừng Auto. Bắt đầu luồng rút tiền...`);
+            await sendTelegramCommand(command, true);
+        } else {
+            if (autoPplinkOn) {
+                // CHỈ LỌC CÁC THIẾT BỊ ĐANG RẢNH (IDLE) ĐỂ ĐẾM SỐ LƯỢNG GỬI LỆNH
+                const idleDevices = Object.values(devices).filter(d => d.status === 'idle');
+                const deviceCount = idleDevices.length;
+
+                if (deviceCount === 0) {
+                    io.emit("UPDATE_LOG", `[Hệ thống] Tất cả thiết bị đều đang bận. Bỏ qua lệnh!`);
+                    return; // Ngắt luôn, không gửi lệnh lên Telegram nữa
+                }
+
+                io.emit("UPDATE_LOG", `[Hệ thống] Gửi ${deviceCount} lệnh cho máy rảnh (Delay: ${linkDelay/1000}s)`);
+                for (let i = 0; i < deviceCount; i++) {
+                    setTimeout(async () => {
+                        await sendTelegramCommand(command, false);
+                    }, i * linkDelay);
+                }
+            } else {
+                io.emit("UPDATE_LOG", `[Hệ thống] Gửi lệnh thủ công: ${command}`);
+                await sendTelegramCommand(command, false);
+            }
+        }
+    });
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`🚀 Server Node.js & Socket.io đang chạy tại Port ${PORT}`);
+});        if (ipKey) {
+            delete devices[ipKey];
+            io.emit('UPDATE_DEVICES', Object.values(devices));
+        }
+    });
+
+    socket.on('TOGGLE_AUTOPPLINK', (status) => {
+        autoPplinkOn = status;
+        io.emit("UPDATE_LOG", `[Hệ thống] Auto-PPLink: ${status ? 'BẬT' : 'TẮT'}`);
+    });
+    
+    socket.on('SET_DELAY', (ms) => linkDelay = ms);
+
+    socket.on('URL_REACHED', async ({ msgId }) => {
+        const ipKey = Object.keys(devices).find(ip => devices[ip].id === socket.id);
+        if(ipKey) {
+            devices[ipKey].status = 'idle';
+            io.emit('UPDATE_DEVICES', Object.values(devices));
+            await clickCheckCompletionButton(msgId, devices[ipKey].ip, io);
+        }
+    });
+
     // --- TÍNH NĂNG MỚI: KIỂM TRA MÁY RẢNH KHI ẤN LỆNH ---
     socket.on('SEND_COMMAND', async (command) => {
         if (command === '/withdraw') {
