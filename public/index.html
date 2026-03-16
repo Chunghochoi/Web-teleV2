@@ -6,6 +6,145 @@
     <title>CryptoBot Controller Max</title>
     <script src="/socket.io/socket.io.js"></script>
     <style>
+        :root {
+            --glass-bg: rgba(255, 255, 255, 0.1);
+            --glass-border: rgba(255, 255, 255, 0.2);
+            --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            --primary: #4facfe;
+            --danger: #ff4b2b;
+            --text-main: #ffffff;
+            --text-muted: #e0e0e0;
+        }
+
+        body {
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: var(--text-main); 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0; 
+            padding: 15px;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 600px; /* Tối ưu cho cả Mobile và PC */
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .glass-panel {
+            background: var(--glass-bg);
+            backdrop-filter: blur(15px);
+            -webkit-backdrop-filter: blur(15px);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: var(--glass-shadow);
+
+        }
+
+        h2, h3 { margin-top: 0; font-weight: 600; letter-spacing: 0.5px; }
+        
+        .status-text { color: #ffd700; font-weight: bold; }
+        .log-box { 
+            background: rgba(0,0,0,0.2); padding: 10px; border-radius: 10px; 
+            font-size: 0.9em; min-height: 20px; word-wrap: break-word;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        /* Lưới Nút bấm tự động co giãn */
+        .btn-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+            gap: 10px;
+        }
+
+        button {
+            background: rgba(255, 255, 255, 0.2); 
+            border: 1px solid rgba(255,255,255,0.3); 
+            padding: 12px 15px;
+            border-radius: 12px; 
+            color: white; 
+            cursor: pointer; 
+            font-weight: bold;
+            font-size: 14px;
+            transition: all 0.2s ease;
+            backdrop-filter: blur(5px);
+        }
+        button:hover, button:active { background: rgba(255, 255, 255, 0.4); transform: scale(0.98); }
+        .btn-danger { background: rgba(255, 75, 43, 0.5); border-color: rgba(255, 75, 43, 0.8); }
+        .btn-danger:hover { background: rgba(255, 75, 43, 0.7); }
+
+        /* Hàng cấu hình cài đặt */
+        .settings-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 15px;
+            background: rgba(0,0,0,0.15);
+            padding: 15px;
+            border-radius: 12px;
+            margin-top: 15px;
+        }
+
+        .input-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+        }
+
+        input[type="number"] {
+            width: 50px; padding: 8px; border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.4);
+            background: rgba(255,255,255,0.1);
+            color: white; font-weight: bold; text-align: center;
+            outline: none;
+        }
+        input[type="number"]:focus { border-color: #4facfe; }
+
+        /* Nút Switch Bật/Tắt Auto kiểu iOS */
+        .switch { position: relative; display: inline-block; width: 46px; height: 24px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider {
+            position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+            background-color: rgba(255,255,255,0.3); transition: .4s; border-radius: 24px;
+        }
+        .slider:before {
+            position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px;
+            background-color: white; transition: .4s; border-radius: 50%;
+        }
+        input:checked + .slider { background-color: #4cd964; }
+        input:checked + .slider:before { transform: translateX(22px); }
+
+        /* Danh sách thiết bị */
+        ul { list-style: none; padding: 0; margin: 0; }
+        li {
+            background: rgba(0,0,0,0.2); padding: 12px; border-radius: 10px; margin-bottom: 8px;
+            font-size: 13px; display: flex; align-items: center; gap: 8px;
+            border-left: 4px solid #4facfe;
+        }
+        .status-badge {
+            padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: bold;
+        }
+        .badge-idle { background: #4cd964; color: #000; }
+        .badge-working { background: #ffcc00; color: #000; }
+
+        .popup {
+            display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: #28a745; padding: 30px; border-radius: 15px; font-size: 20px; font-weight: bold;
+            text-align: center; z-index: 1000; box-shadow: 0 10px 40px rgba(0,0,0,0.5); width: 80%; max-width: 300px;
+        }
+
+        /* Responsive Mobile Nhỏ */
+        @media (max-width: 400px) {
+            .btn-grid { grid-template-columns: 1fr; } /* Nút dàn thành cột dọc */
+            .settings-row { flex-direction: column; align-items: flex-start; }
+        }
         /* ... (Giữ nguyên style cũ của bạn ở đây, thêm class cho rank) ... */
         :root { --glass-bg: rgba(255, 255, 255, 0.1); --glass-border: rgba(255, 255, 255, 0.2); --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.3); --text-main: #ffffff; }
         body { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: var(--text-main); font-family: sans-serif; margin: 0; padding: 15px; min-height: 100vh; display: flex; justify-content: center; }
