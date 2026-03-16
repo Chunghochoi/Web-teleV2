@@ -17,23 +17,45 @@ let devices = {};
 let autoPplinkOn = false;
 let linkDelay = 5000;
 
+// BIẾN QUẢN LÝ VÒNG LẶP NHIỆM VỤ
+let currentTarget = 0;
+let currentCompleted = 0;
+let activeCommand = '';
+
 function distributeLink(url, msgId) {
     const idleDevice = Object.values(devices).find(d => d.status === 'idle');
     if (idleDevice) {
         devices[idleDevice.ip].status = 'working'; 
         io.emit('UPDATE_DEVICES', Object.values(devices)); 
         io.to(idleDevice.id).emit('OPEN_LINK', { url, msgId });
-        io.emit("UPDATE_LOG", `[Hệ thống] Đã giao link ${msgId} cho thiết bị IP ${idleDevice.ip}`);
+        io.emit("UPDATE_LOG", `[Hệ thống] Đã giao link cho thiết bị IP ${idleDevice.ip}`);
     } else {
-        io.emit("UPDATE_LOG", `[Cảnh báo] Nhận được link nhưng các thiết bị đều đang bận!`);
+        io.emit("UPDATE_LOG", `[Cảnh báo] Mọi thiết bị đang bận!`);
     }
 }
 
 const getAutoStatus = () => autoPplinkOn;
-initTelegram(io, distributeLink, getAutoStatus);
+
+// HÀM CHẠY KHI NHIỆM VỤ ĐƯỢC ADMIN DUYỆT THÀNH CÔNG
+const onTaskApproved = () => {
+    currentCompleted++;
+    io.emit("UPDATE_LOG", `🏆 Tiến độ: ${currentCompleted} / ${currentTarget} NV`);
+    
+    // Nếu chưa đủ mục tiêu và Auto đang bật -> Tự động gọi link mới
+    if (currentCompleted < currentTarget && autoPplinkOn) {
+        setTimeout(async () => {
+            io.emit("UPDATE_LOG", `[Hệ thống] Đang tự động gọi link tiếp theo...`);
+            await sendTelegramCommand(activeCommand, false);
+        }, 2000); // Đợi 2s rồi gọi để tránh spam
+    } else if (currentCompleted >= currentTarget) {
+        io.emit("UPDATE_LOG", `🎉 ĐÃ HOÀN THÀNH MỤC TIÊU ${currentTarget} NHIỆM VỤ! Vòng lặp dừng.`);
+        currentTarget = 0; // Reset
+    }
+};
+
+initTelegram(io, distributeLink, getAutoStatus, onTaskApproved);
 
 io.on('connection', (socket) => {
-
     socket.on('REGISTER_EXTENSION', () => {
         const ip = socket.handshake.headers['x-forwarded-for']?.split(',')[0] || socket.request.connection.remoteAddress;
         const geo = geoip.lookup(ip);
@@ -44,50 +66,46 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => { 
         const ipKey = Object.keys(devices).find(ip => devices[ip].id === socket.id);
-        if (ipKey) {
-            delete devices[ipKey];
-            io.emit('UPDATE_DEVICES', Object.values(devices));
-        }
+        if (ipKey) { delete devices[ipKey]; io.emit('UPDATE_DEVICES', Object.values(devices)); }
     });
 
-    socket.on('TOGGLE_AUTOPPLINK', (status) => {
-        autoPplinkOn = status;
-        io.emit("UPDATE_LOG", `[Hệ thống] Auto-PPLink: ${status ? 'BẬT' : 'TẮT'}`);
-    });
-    
+    socket.on('TOGGLE_AUTOPPLINK', (status) => { autoPplinkOn = status; });
     socket.on('SET_DELAY', (ms) => { linkDelay = ms; });
 
+    // KHI EXTENSION LÀM XONG TRÊN WEB
     socket.on('URL_REACHED', async ({ msgId }) => {
         const ipKey = Object.keys(devices).find(ip => devices[ip].id === socket.id);
         if(ipKey) {
-            devices[ipKey].status = 'idle';
+            devices[ipKey].status = 'idle'; // Đặt máy thành rảnh
             io.emit('UPDATE_DEVICES', Object.values(devices));
+            
+            // Yêu cầu Bot ấn nút "Kiểm tra hoàn thành"
             await clickCheckCompletionButton(msgId, devices[ipKey].ip, io);
         }
     });
 
-    socket.on('SEND_COMMAND', async (command) => {
+    // KHI ẤN NÚT LỆNH TRÊN WEB UI
+    socket.on('SEND_COMMAND', async ({ command, target }) => {
         if (command === '/withdraw') {
-            io.emit("UPDATE_LOG", `[Hệ thống] Tạm dừng Auto. Bắt đầu luồng rút tiền...`);
             await sendTelegramCommand(command, true);
         } else {
+            activeCommand = command;
+            currentTarget = target;
+            currentCompleted = 0; // Reset bộ đếm
+
             if (autoPplinkOn) {
                 const idleDevices = Object.values(devices).filter(d => d.status === 'idle');
-                const deviceCount = idleDevices.length;
+                const deviceCount = Math.min(idleDevices.length, currentTarget);
 
-                if (deviceCount === 0) {
-                    io.emit("UPDATE_LOG", `[Hệ thống] Tất cả thiết bị đều đang bận. Bỏ qua lệnh!`);
-                    return; 
-                }
+                if (deviceCount === 0) return;
 
-                io.emit("UPDATE_LOG", `[Hệ thống] Gửi ${deviceCount} lệnh cho máy rảnh (Delay: ${linkDelay/1000}s)`);
+                io.emit("UPDATE_LOG", `[Khởi động] Gửi ${deviceCount} lệnh (Mục tiêu: ${currentTarget} NV)`);
                 for (let i = 0; i < deviceCount; i++) {
                     setTimeout(async () => {
-                        await sendTelegramCommand(command, false);
+                        await sendTelegramCommand(activeCommand, false);
                     }, i * linkDelay);
                 }
             } else {
-                io.emit("UPDATE_LOG", `[Hệ thống] Gửi lệnh thủ công: ${command}`);
                 await sendTelegramCommand(command, false);
             }
         }
