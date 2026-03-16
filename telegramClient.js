@@ -2,60 +2,46 @@ const { Api, TelegramClient } = require("telegram");
 const { StringSession } = require("telegram/sessions");
 const { NewMessage } = require("telegram/events");
 
-// Đọc biến môi trường (Đã bỏ BOT_ID)
 const apiId = parseInt(process.env.API_ID);
 const apiHash = process.env.API_HASH;
 const stringSession = new StringSession(process.env.SESSION_STRING || "");
 
-// SỬ DỤNG TRỰC TIẾP USERNAME CỦA BOT ĐỂ TRÁNH LỖI ID
 const BOT_USERNAME = "@CryptoMoney_Bot";
 let botNumericId = null;
 
-// Khởi tạo client Telegram
 const client = new TelegramClient(stringSession, apiId, apiHash, { connectionRetries: 5 });
 
-// --- CÁC BIẾN TRẠNG THÁI ---
 let withdrawState = 'IDLE'; 
 let withdrawAmount = "0";
 let dailyLinks = 0;
 let isPaused = false;
-let currentCommand = '/uptolink2step';
 
-async function initTelegram(io, distributeLinkCallback, getAutoStatus) {
+// Thêm callback onTaskApproved để báo cho server biết đã xong 1 NV
+async function initTelegram(io, distributeLinkCallback, getAutoStatus, onTaskApproved) {
     await client.connect();
     console.log("✅ Đã kết nối Telegram Userbot thành công!");
 
     try {
-        // Tự động lấy ID dạng số của Bot để kiểm tra tin nhắn đến
         const botEntity = await client.getEntity(BOT_USERNAME);
         botNumericId = botEntity.id.toJSNumber();
-        console.log(`✅ Đã nhận diện ID Bot: ${botNumericId}`);
-    } catch (error) {
-        console.log("⚠️ Cảnh báo: Chưa thể quét Bot. Hệ thống vẫn sẽ gửi lệnh.");
-    }
+    } catch (error) { console.log("⚠️ Cảnh báo: Chưa quét được ID Bot."); }
 
-    // Lắng nghe tin nhắn mới
     client.addEventHandler(async (event) => {
         const message = event.message;
-        
-        // Kiểm tra đúng tin nhắn từ Bot @CryptoMoney_Bot
         if (botNumericId && message.peerId.userId?.toJSNumber() !== botNumericId) return;
 
         const text = message.message || "";
-
         if (text.includes("Đang tạo link...")) return;
 
-        // A. LUỒNG NHẬN LINK NHIỆM VỤ TỪ BOT
-        if (message.replyMarkup && message.replyMarkup.rows.length >= 2) {
+        // A. NHẬN LINK
+        if (message.replyMarkup && message.replyMarkup.rows.length > 0) {
             const btnMoLink = message.replyMarkup.rows[0]?.buttons[0];
-            
             if (btnMoLink && btnMoLink.url && !isPaused) {
                 const url = btnMoLink.url;
                 const msgId = message.id;
                 
                 dailyLinks++;
-                io.emit("UPDATE_LOG", `[Hệ thống] Nhận link NV #${dailyLinks}. Đang tìm thiết bị rảnh...`);
-                
+                io.emit("UPDATE_LOG", `[Hệ thống] Nhận link NV #${dailyLinks}. Đang phân phối...`);
                 distributeLinkCallback(url, msgId);
 
                 if (dailyLinks % 50 === 0) await client.sendMessage(BOT_USERNAME, { message: "/top" });
@@ -64,99 +50,79 @@ async function initTelegram(io, distributeLinkCallback, getAutoStatus) {
             }
         }
 
-        // B. LUỒNG LẤY THÔNG TIN CẬP NHẬT (/view)
-        if (text.includes("Số dư:") && text.includes("NV hôm nay:")) {
-            const balanceRegex = /Số dư: (\d+)đ/;
-            const taskRegex = /NV hôm nay: (\d+\/\d+)/;
-            const balance = text.match(balanceRegex)?.[1] || "0";
-            const tasks = text.match(taskRegex)?.[1] || "0/0";
-            io.emit("UPDATE_STATS", { balance, tasks });
-        }
-
-        // C. LUỒNG RÚT TIỀN TỰ ĐỘNG (/withdraw)
+        // B. RÚT TIỀN
         if (withdrawState === 'IDLE' && text.includes("Nhập tên ngân hàng")) {
-            const balanceRegex = /Số dư: (\d+)đ/;
-            withdrawAmount = text.match(balanceRegex)?.[1] || "0";
-            io.emit("UPDATE_LOG", `[Rút tiền] Đang yêu cầu rút về Momo...`);
+            withdrawAmount = text.match(/Số dư: (\d+)đ/)?.[1] || "0";
             await client.sendMessage(BOT_USERNAME, { message: "Momo" });
             withdrawState = 'WAIT_NAME';
-        } 
-        else if (withdrawState === 'WAIT_NAME' && text.includes("Nhập tên chủ tài khoản")) {
-            io.emit("UPDATE_LOG", `[Rút tiền] Đang nhập tên chủ TK...`);
+        } else if (withdrawState === 'WAIT_NAME' && text.includes("Nhập tên chủ tài khoản")) {
             await client.sendMessage(BOT_USERNAME, { message: "DANG VAN CHUNG" });
             withdrawState = 'WAIT_AMOUNT';
-        }
-        else if (withdrawState === 'WAIT_AMOUNT' && text.includes("Nhập số tiền muốn rút")) {
-            io.emit("UPDATE_LOG", `[Rút tiền] Đang gửi yêu cầu rút ${withdrawAmount}đ...`);
+        } else if (withdrawState === 'WAIT_AMOUNT' && text.includes("Nhập số tiền muốn rút")) {
             await client.sendMessage(BOT_USERNAME, { message: withdrawAmount });
             withdrawState = 'IDLE';
-        }
-        else if (text.includes("Yêu cầu rút") && text.includes("đã gửi. Chờ admin duyệt")) {
-            io.emit("UPDATE_LOG", `[Rút tiền] Hoàn tất lệnh. Chờ duyệt!`);
+        } else if (text.includes("Yêu cầu rút") && text.includes("đã gửi")) {
             isPaused = false; 
-        }
-        else if (text.includes("Yêu cầu rút") && text.includes("đã được duyệt!")) {
+        } else if (text.includes("đã được duyệt!")) {
             io.emit("WITHDRAW_SUCCESS", "Tiền về, Tiền về");
         }
 
-        // D. LUỒNG ADMIN DUYỆT NHIỆM VỤ -> CHẠY TIẾP AUTO
+        // C. DUYỆT NHIỆM VỤ -> BÁO SERVER ĐỂ TĂNG BỘ ĐẾM VÀ GỌI LINK TIẾP
         if (text.includes("Admin đã duyệt nhiệm vụ của bạn!")) {
-            io.emit("UPDATE_LOG", `[Thành công] Nhiệm vụ đã được duyệt! Đang gọi link tiếp...`);
-            
-            const isAutoOn = getAutoStatus();
-            if (isAutoOn && !isPaused) {
-                setTimeout(async () => {
-                    await client.sendMessage(BOT_USERNAME, { message: currentCommand });
-                }, 2000); 
-            }
+            io.emit("UPDATE_LOG", `[Thành công] Nhiệm vụ đã được duyệt cộng tiền!`);
+            onTaskApproved(); // Kích hoạt bộ đếm trên server
         }
 
     }, new NewMessage({}));
 }
 
+// FIX LỖI ẤN NÚT: Tìm nút động bằng cách quét chữ "Kiểm tra"
 async function clickCheckCompletionButton(msgId, deviceIp, io) {
     try {
-        io.emit("UPDATE_LOG", `[Thiết bị ${deviceIp}] Đang ấn nút báo cáo...`);
+        io.emit("UPDATE_LOG", `[Thiết bị ${deviceIp}] Đang ấn nút Kiểm tra hoàn thành...`);
         const msgs = await client.getMessages(BOT_USERNAME, { ids: msgId });
         if (!msgs || msgs.length === 0) return;
 
-        const btnKiemTra = msgs[0].replyMarkup?.rows[1]?.buttons[0];
+        let targetData = null;
         
-        if (btnKiemTra && btnKiemTra.data) {
+        // Quét toàn bộ các hàng và các nút để tìm đúng nút "Kiểm tra hoàn thành"
+        for (const row of msgs[0].replyMarkup.rows) {
+            for (const btn of row.buttons) {
+                if (btn.text && btn.text.includes("Kiểm tra")) {
+                    targetData = btn.data;
+                    break;
+                }
+            }
+            if (targetData) break;
+        }
+
+        if (targetData) {
             await client.invoke(new Api.messages.GetBotCallbackAnswer({
                 peer: BOT_USERNAME,
                 msgId: msgId,
-                data: btnKiemTra.data
+                data: targetData
             }));
-            io.emit("UPDATE_LOG", `[Hệ thống] Đã báo cáo hoàn thành NV ID: ${msgId}`);
+            io.emit("UPDATE_LOG", `[Hệ thống] Đã bấm nút Kiểm tra cho ID: ${msgId} thành công!`);
+        } else {
+            // Backup phòng trường hợp không lấy được text
+            const backupBtn = msgs[0].replyMarkup?.rows[1]?.buttons[0];
+            if (backupBtn && backupBtn.data) {
+                await client.invoke(new Api.messages.GetBotCallbackAnswer({
+                    peer: BOT_USERNAME, msgId: msgId, data: backupBtn.data
+                }));
+            }
         }
     } catch (error) {
-        console.error("Lỗi khi ấn nút kiểm tra:", error);
-        io.emit("UPDATE_LOG", `[Lỗi] Không thể ấn báo cáo cho ID ${msgId}`);
+        console.error("Lỗi ấn nút:", error);
     }
 }
 
 async function sendTelegramCommand(command, isWithdraw = false) {
     try {
-        if (isWithdraw) {
-            isPaused = true;
-            withdrawState = 'IDLE';
-        } else {
-            isPaused = false;
-            currentCommand = command; 
-        }
-        
-        // Gửi lệnh thẳng vào username của bot
+        if (isWithdraw) { isPaused = true; withdrawState = 'IDLE'; } 
+        else { isPaused = false; }
         await client.sendMessage(BOT_USERNAME, { message: command });
-        console.log(`Đã gửi lệnh thành công: ${command}`);
-        
-    } catch (error) {
-        console.error(`❌ Lỗi gửi lệnh ${command}:`, error);
-    }
+    } catch (error) { console.error(`❌ Lỗi gửi lệnh:`, error); }
 }
 
-module.exports = {
-    initTelegram,
-    clickCheckCompletionButton,
-    sendTelegramCommand
-};
+module.exports = { initTelegram, clickCheckCompletionButton, sendTelegramCommand };
