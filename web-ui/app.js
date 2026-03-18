@@ -1,4 +1,4 @@
-const socket = io('https://your-render-app-url.onrender.com'); // Thay link render của bạn
+const socket = io('https://superidolbot.onrender.com'); // Thay link render của bạn
 let isExtensionAlive = false;
 
 // Khôi phục cài đặt từ LocalStorage
