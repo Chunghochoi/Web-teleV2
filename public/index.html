@@ -233,6 +233,7 @@
     });
 
     // Nhận báo cáo từ Extension gửi về Web UI, đẩy lên Server
+    document.addEventListener('WEB_TASK_STARTED', (e) => socket.emit('TASK_STARTED', e.detail));
     document.addEventListener('WEB_URL_REACHED', (e) => socket.emit('URL_REACHED', e.detail));
     document.addEventListener('WEB_REPORT_ERROR', (e) => socket.emit('REPORT_ERROR', e.detail));
 
