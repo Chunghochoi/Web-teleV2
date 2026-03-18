@@ -25,25 +25,35 @@ let currentCompleted = 0;
 let activeCommand = '';
 let activeSocketId = null;
 
-// HÀM PHÂN PHỐI LINK VỚI CƠ CHẾ PENDING 5 GIÂY
+// ==========================================
+// HÀM PHÂN PHỐI LINK (ĐÃ SỬA LỖI TÌM THIẾT BỊ)
+// ==========================================
 function distributeLink(url, msgId) {
     let targetDevice = null;
-    if (autoPplinkOn) targetDevice = Object.values(devices).find(d => d.status === 'idle');
-    else if (devices[activeSocketId] && devices[activeSocketId].status === 'idle') targetDevice = devices[activeSocketId];
+    
+    if (autoPplinkOn) {
+        // Đa máy: Lấy máy rảnh đầu tiên
+        targetDevice = Object.values(devices).find(d => d.status === 'idle');
+    } else {
+        // FIX LỖI TẠI ĐÂY: Chạy đơn, tìm đúng máy vừa ra lệnh thông qua biến id
+        targetDevice = Object.values(devices).find(d => d.id === activeSocketId && d.status === 'idle');
+        // Nếu không tìm thấy bằng id (do lỡ F5), lấy đại máy duy nhất đang rảnh
+        if (!targetDevice) {
+            targetDevice = Object.values(devices).find(d => d.status === 'idle');
+        }
+    }
 
     if (targetDevice) {
-        // Chuyển sang trạng thái ĐANG CHỜ PHẢN HỒI (pending) thay vì working
         targetDevice.status = 'pending'; 
         io.emit('UPDATE_DEVICES', Object.values(devices)); 
         io.to(targetDevice.id).emit('OPEN_LINK', { url, msgId });
         io.emit("UPDATE_LOG", `[Hệ thống] Giao link cho IP ${targetDevice.ip}. Đang đợi Extension mở tab...`);
 
-        // NẾU SAU 5 GIÂY EXTENSION KHÔNG MỞ ĐƯỢC TAB -> HỦY LỆNH VÀ TRẢ VỀ IDLE
         setTimeout(() => {
             if (devices[targetDevice.ip] && devices[targetDevice.ip].status === 'pending') {
                 devices[targetDevice.ip].status = 'idle';
                 io.emit('UPDATE_DEVICES', Object.values(devices));
-                io.emit("UPDATE_LOG", `⚠️ [Lỗi Đồng Bộ] IP ${targetDevice.ip} không phản hồi! Hãy F5 lại trình duyệt trang Web điều khiển.`);
+                io.emit("UPDATE_LOG", `⚠️[Lỗi Đồng Bộ] IP ${targetDevice.ip} không phản hồi! Hãy F5 lại trình duyệt trang Web điều khiển.`);
             }
         }, 5000);
 
@@ -114,13 +124,12 @@ io.on('connection', (socket) => {
         handleTaskFailure(msgId, socket.id, url);
     });
 
-    // TÍNH NĂNG MỚI: CHÍNH THỨC XÁC NHẬN ĐÃ MỞ TAB VÀ BẮT ĐẦU TÍNH GIỜ
     socket.on('TASK_STARTED', ({ msgId, url }) => {
         const ipKey = Object.keys(devices).find(ip => devices[ip].id === socket.id);
         if(ipKey && devices[ipKey].status === 'pending') {
-            devices[ipKey].status = 'working'; // Chốt khóa trạng thái bận
+            devices[ipKey].status = 'working'; 
             io.emit('UPDATE_DEVICES', Object.values(devices));
-            io.emit("UPDATE_LOG", `🚀 [IP: ${devices[ipKey].ip}] Đã MỞ TAB thành công! Bắt đầu tính giờ 180s...`);
+            io.emit("UPDATE_LOG", `🚀 [IP: ${devices[ipKey].ip}] Đã MỞ TAB thành công! Đang cày (Timeout 180s)...`);
 
             if (taskTimers[msgId]) clearTimeout(taskTimers[msgId]);
             taskTimers[msgId] = setTimeout(() => { handleTaskFailure(msgId, socket.id, url); }, 180000);
