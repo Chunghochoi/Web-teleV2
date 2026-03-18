@@ -1,0 +1,18 @@
+:root { --glass-bg: rgba(255, 255, 255, 0.1); --glass-border: rgba(255, 255, 255, 0.2); }
+body {
+    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+    color: white; height: 100vh; display: flex; justify-content: center; align-items: center;
+}
+.glass-container { width: 90%; max-width: 1200px; }
+.glass-card {
+    background: var(--glass-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--glass-border); border-radius: 16px; padding: 20px; box-shadow: 0 4px 30px rgba(0,0,0,0.1);
+}
+.panels { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-top: 20px; }
+.log-box { height: 150px; overflow-y: auto; font-family: monospace; font-size: 12px; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 8px;}
+button { padding: 10px 15px; border: none; border-radius: 8px; background: rgba(255,255,255,0.2); color: white; cursor: pointer; transition: 0.3s; margin: 5px; font-weight: bold;}
+button:hover { background: rgba(255,255,255,0.4); }
+input { padding: 8px; border-radius: 5px; border: none; background: rgba(255,255,255,0.8); }
+.status.connected { color: #2ed573; }
+.status.disconnected { color: #ff4757; }

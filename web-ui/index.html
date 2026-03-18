@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Auto MMO Max Pro</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body class="lipi-glass-bg">
+    <div class="glass-container">
+        <header>
+            <h1>🚀 AUTO MMO MAX PRO</h1>
+            <div id="ext-status" class="status connected">Extension: Đang kết nối...</div>
+        </header>
+
+        <div class="panels">
+            <!-- Thông tin -->
+            <div class="panel glass-card">
+                <h3>Thống Kê Telegram</h3>
+                <p id="balance">Số dư: Đang tải...</p>
+                <div id="logs" class="log-box"></div>
+            </div>
+
+            <!-- Điều khiển -->
+            <div class="panel glass-card controls">
+                <h3>Bảng Điều Khiển</h3>
+                <div class="toggles">
+                    <label>Auto-PPLink <input type="checkbox" id="auto-pp"></label>
+                    <label>Target Mode <input type="checkbox" id="target-mode"></label>
+                </div>
+                <div class="inputs">
+                    <input type="number" id="target-val" placeholder="Số Target (VD: 50)">
+                    <input type="number" id="delay-val" placeholder="Delay (s)" value="5">
+                </div>
+                <div class="buttons">
+                    <button id="btn-2step">UpToLink 2 Step</button>
+                    <button id="btn-3step">UpToLink 3 Step</button>
+                    <button id="btn-view">View Info</button>
+                    <button id="btn-withdraw" style="background: #ff4757;">Rút Tiền (Momo)</button>
+                </div>
+            </div>
+            
+            <!-- Thiết bị -->
+            <div class="panel glass-card">
+                <h3>Thiết Bị Đang Kết Nối</h3>
+                <ul id="device-list"></ul>
+            </div>
+        </div>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
